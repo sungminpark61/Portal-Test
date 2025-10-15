@@ -5,26 +5,24 @@ using UnityEngine.Rendering.Universal;
 public class PortalTrigger : MonoBehaviour
 {
     [Header("URP 렌더러 설정")]
-    [Tooltip("프로젝트의 URP Renderer 데이터 에셋을 연결하세요. (예: PC_Renderer)")]
+    [Tooltip("프로젝트의 URP Renderer 데이터 에셋을 연결하세요.")]
     public ScriptableRendererData rendererData;
 
     [Tooltip("설정을 변경할 Render Objects 기능의 이름을 정확히 입력하세요.")]
     public string targetFeatureName = "StencilTarget";
 
-    [Header("플레이어 설정")]
-    [Tooltip("플레이어 또는 메인 카메라 오브젝트를 연결하세요.")]
-    public Transform playerCamera;
+    [Header("포탈 오브젝트 설정")]
+    [Tooltip("충돌 시 비활성화시킬 포탈 게임 오브젝트 자체를 여기에 연결하세요.")]
+    public GameObject portalObjectToDisable;
 
-    // 내부 변수
     private RenderObjects renderObjectsFeature;
-    private bool isPlayerInside = false;
-    private bool wasInFront;
+    private bool isPortalViewActive = false;
 
     void Start()
     {
-        if (rendererData == null || playerCamera == null)
+        if (rendererData == null)
         {
-            Debug.LogError("PortalTrigger: 렌더러 데이터 또는 플레이어 카메라가 설정되지 않았습니다! Inspector 창을 확인해주세요.");
+            Debug.LogError("PortalViewController: 렌더러 데이터가 설정되지 않았습니다!");
             this.enabled = false;
             return;
         }
@@ -33,74 +31,84 @@ public class PortalTrigger : MonoBehaviour
 
         if (renderObjectsFeature == null)
         {
-            Debug.LogError($"PortalTrigger: '{targetFeatureName}' 이름을 가진 RenderObjects 기능을 '{rendererData.name}' 에셋에서 찾을 수 없습니다.");
+            Debug.LogError($"PortalViewController: '{targetFeatureName}' 기능을 찾을 수 없습니다.");
             this.enabled = false;
             return;
         }
 
-        wasInFront = IsPlayerInFront();
+        // 시작할 때 원래 상태로 초기화
+        ResetToNormalViewOnStart();
+    }
+
+    // [핵심 변경] 스크립트(오브젝트)가 파괴될 때 (주로 게임 종료 시) 호출됩니다.
+    void OnDestroy()
+    {
+        // 렌더러 데이터가 메모리에서 해제되지 않았을 경우에만 실행 (오류 방지)
+        if (rendererData != null && renderObjectsFeature != null)
+        {
+            SetStencilState(CompareFunction.Equal, "오브젝트 파괴 시 Equal로 초기화");
+        }
     }
 
     void OnTriggerEnter(Collider other)
     {
-        if (other.CompareTag("MainCamera"))
+        if (other.CompareTag("MainCamera") && !isPortalViewActive)
         {
-            Debug.Log("Player entered");
-            isPlayerInside = true;
+            ActivatePortalView();
+
+            if (portalObjectToDisable != null)
+            {
+                portalObjectToDisable.SetActive(false);
+                Debug.Log($"'{portalObjectToDisable.name}' 포탈을 비활성화했습니다.");
+            }
+            else
+            {
+                Debug.LogWarning("비활성화할 포탈 오브젝트가 지정되지 않아, 현재 오브젝트를 비활성화합니다.");
+                this.gameObject.SetActive(false);
+            }
         }
     }
 
-    void OnTriggerExit(Collider other)
+    public void ActivatePortalView()
     {
-        
-        if (other.CompareTag("MainCamera"))
-        {
-            Debug.Log("Player exited");
-            isPlayerInside = false;
-        }
+        if (renderObjectsFeature == null || isPortalViewActive) return;
+
+        isPortalViewActive = true;
+        SetStencilState(CompareFunction.NotEqual, "활성화: NotEqual");
     }
 
-    void Update()
-    {
-        if (!isPlayerInside) return;
-
-        bool isInFront = IsPlayerInFront();
-
-        if (isInFront != wasInFront)
-        {
-            SwitchStencilState();
-            wasInFront = isInFront;
-        }
-    }
-
-    private bool IsPlayerInFront()
-    {
-        Vector3 directionToPlayer = (playerCamera.position - transform.position).normalized;
-        float dot = Vector3.Dot(transform.forward, directionToPlayer);
-        return dot > 0;
-    }
-
-    // [수정된 부분] 스텐실 상태를 전환하는 함수
-    private void SwitchStencilState()
+    public void ResetToNormalView()
     {
         if (renderObjectsFeature == null) return;
 
+        isPortalViewActive = false;
+        SetStencilState(CompareFunction.Equal, "복구: Equal");
+
+        if (portalObjectToDisable != null)
+        {
+            portalObjectToDisable.SetActive(true);
+            Debug.Log($"'{portalObjectToDisable.name}' 포탈을 다시 활성화했습니다.");
+        }
+    }
+
+    private void ResetToNormalViewOnStart()
+    {
+        isPortalViewActive = false;
+        SetStencilState(CompareFunction.Equal, "시작 시 Equal로 초기화");
+
+        if (portalObjectToDisable != null && !portalObjectToDisable.activeSelf)
+        {
+            portalObjectToDisable.SetActive(true);
+        }
+    }
+
+    private void SetStencilState(CompareFunction state, string message)
+    {
         var newSettings = renderObjectsFeature.settings.stencilSettings;
-
-        // 'CompareFunction'을 'stencilCompareFunction'으로 변경
-        if (newSettings.stencilCompareFunction == CompareFunction.Equal)
-        {
-            newSettings.stencilCompareFunction = CompareFunction.NotEqual;
-            Debug.Log("스텐실 상태 변경: NotEqual (포탈 내부 진입)");
-        }
-        else
-        {
-            newSettings.stencilCompareFunction = CompareFunction.Equal;
-            Debug.Log("스텐실 상태 변경: Equal (포탈 외부로 나옴)");
-        }
-
+        newSettings.stencilCompareFunction = state;
         renderObjectsFeature.settings.stencilSettings = newSettings;
         rendererData.SetDirty();
+        Debug.Log($"[PortalViewController] 스텐실 상태 {message}");
     }
 
     private RenderObjects FindRenderFeature(string featureName)
